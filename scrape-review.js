@@ -41,6 +41,12 @@ const convertFields = (inputString) => {
   });
 };
 
+function extractProductNameFromUrl(url) {
+  const match = url.match(/shopee.vn\/(.*?)\-i\./);
+  if (!match || !match[1]) return "";
+  return decodeURIComponent(match[1].replace(/-/g, " "));
+}
+
 const allReviews = fs.existsSync(reviewsPath)
   ? JSON.parse(fs.readFileSync(reviewsPath, "utf-8"))
   : [];
@@ -208,7 +214,7 @@ const randomDelay = (min, max) => delay(Math.random() * (max - min) + min);
   const sheetData = allReviews.flatMap((product) =>
     product.reviews.map((review) => ({
       productLink: product.link,
-      productName: product.name,
+      productName: extractProductNameFromUrl(product.link),
       user: review.user,
       rating: review.rating,
       time: convertFields(review.time).time,
