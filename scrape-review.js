@@ -32,7 +32,7 @@ const convertFields = (inputString) => {
   const [time, typeDescription] = inputString.split(" | ");
 
   // Tách thông tin 'type' sau phần "Phân loại hàng: "
-  const type = typeDescription.split(":")[1].trim();
+  const type = typeDescription ? typeDescription.split(":")[1].trim() : null;
 
   // In kết quả
   return (result = {
