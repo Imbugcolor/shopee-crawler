@@ -2,14 +2,18 @@ const puppeteer = require("puppeteer-core");
 const fs = require("fs");
 const path = require("path");
 const xlsx = require("xlsx"); // Import thư viện xlsx
+const shopName = require("./shop");
 const { google } = require("googleapis");
-const axios = require("axios");
+const axios  = require("axios");
 
 const CREDENTIALS_PATH = "./secret/credentials.json";
 const SPREADSHEET_ID = "1TId4ofTyab13rj3cP0AwLbUk4MnI3-FwOvK0HMfYlTU";
+const XLSX_FILE_PATH = path.resolve(`${shopName}.xlsx`);
+const NEW_SHEET_NAME = shopName;
 
-const productList = JSON.parse(fs.readFileSync(`products.json`, "utf-8"));
-const completedPath = path.resolve(`products-completed.json`);
+const productList = JSON.parse(fs.readFileSync(`${shopName}.json`, "utf-8"));
+const reviewsPath = path.resolve(`${shopName}-reviews.json`);
+const completedPath = path.resolve(`${shopName}-completed.json`);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -50,16 +54,20 @@ function extractProductNameFromUrl(url) {
   return decodeURIComponent(match[1].replace(/-/g, " "));
 }
 
+const allReviews = fs.existsSync(reviewsPath)
+  ? JSON.parse(fs.readFileSync(reviewsPath, "utf-8"))
+  : [];
+
 const completedUrls = fs.existsSync(completedPath)
   ? new Set(JSON.parse(fs.readFileSync(completedPath, "utf-8")))
   : new Set();
 
 const randomDelay = (min, max) => delay(Math.random() * (max - min) + min);
 
-const webhookUrl =
-  "https://open-sg.larksuite.com/anycross/trigger/callback/MGY0OWZmMjMzZmQ0ZWI0NjgzMTkyZWYxODMyMzA4OWFi"; // Thay bằng webhook thật
 
-async function uploadXlsxToSheet(filePath, sheetName) {
+const webhookUrl = "https://open-sg.larksuite.com/anycross/trigger/callback/MGY0OWZmMjMzZmQ0ZWI0NjgzMTkyZWYxODMyMzA4OWFi"; // Thay bằng webhook thật
+
+async function uploadXlsxToSheet() {
   const auth = new google.auth.GoogleAuth({
     keyFile: CREDENTIALS_PATH,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -69,18 +77,16 @@ async function uploadXlsxToSheet(filePath, sheetName) {
   const sheets = google.sheets({ version: "v4", auth: client });
 
   // Read xlsx
-  const workbook = xlsx.readFile(filePath);
+  const workbook = xlsx.readFile(XLSX_FILE_PATH);
   const sheetNames = workbook.SheetNames;
   const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetNames[0]], {
     header: 1,
   });
 
   // Get all sheets
-  const sheetMeta = await sheets.spreadsheets.get({
-    spreadsheetId: SPREADSHEET_ID,
-  });
+  const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
   const existingSheet = sheetMeta.data.sheets.find(
-    (s) => s.properties.title === sheetName
+    (s) => s.properties.title === NEW_SHEET_NAME
   );
 
   // Delete sheet if exists
@@ -97,7 +103,7 @@ async function uploadXlsxToSheet(filePath, sheetName) {
         ],
       },
     });
-    console.log(`🗑️ Đã xóa sheet cũ: ${sheetName}`);
+    console.log(`🗑️ Đã xóa sheet cũ: ${NEW_SHEET_NAME}`);
   }
 
   // Add new sheet
@@ -108,7 +114,7 @@ async function uploadXlsxToSheet(filePath, sheetName) {
         {
           addSheet: {
             properties: {
-              title: sheetName,
+              title: NEW_SHEET_NAME,
             },
           },
         },
@@ -119,7 +125,7 @@ async function uploadXlsxToSheet(filePath, sheetName) {
   // Ghi dữ liệu vào sheet mới
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${sheetName}!A1`,
+    range: `${NEW_SHEET_NAME}!A1`,
     valueInputOption: "RAW",
     requestBody: {
       values: jsonData,
@@ -137,16 +143,8 @@ async function uploadXlsxToSheet(filePath, sheetName) {
 
   const page = await browser.newPage();
 
-  for (const [index, product] of productList.entries()) {
+  for (const [index, product] of productList.slice(0, 1).entries()) {
     const url = product.link;
-    const code = product.code;
-    const XLSX_FILE_PATH = path.resolve(`${code}.xlsx`);
-    const NEW_SHEET_NAME = code;
-    const reviewsPath = path.resolve(`${code}.json`);
-
-    const allReviews = fs.existsSync(reviewsPath)
-    ? JSON.parse(fs.readFileSync(reviewsPath, "utf-8"))
-    : [];
 
     if (completedUrls.has(url)) {
       console.log(
@@ -268,46 +266,6 @@ async function uploadXlsxToSheet(filePath, sheetName) {
         "utf-8"
       );
 
-      // Chuyển đổi JSON thành XLSX
-      const workbook = xlsx.utils.book_new();
-      const sheetData = allReviews.flatMap((product) =>
-        product.reviews.map((review) => ({
-          productLink: product.link,
-          productName: extractProductNameFromUrl(product.link),
-          user: review.user,
-          rating: review.rating,
-          time: convertFields(review.time).time,
-          type: convertFields(review.time).type,
-        }))
-      );
-
-      const worksheet = xlsx.utils.json_to_sheet(sheetData);
-      xlsx.utils.book_append_sheet(workbook, worksheet, "Reviews");
-
-      // Lưu file XLSX
-      const xlsxPath = `${code}.xlsx`;
-      xlsx.writeFile(workbook, xlsxPath);
-
-      console.log(`🎉 Đã xuất dữ liệu thành công vào file: ${xlsxPath}`);
-
-      // Upload file XLSX lên Google Sheets
-      const newSheetId = await uploadXlsxToSheet(XLSX_FILE_PATH, NEW_SHEET_NAME);
-      // Gửi sheetId sau khi tạo thành công
-      await axios.post(webhookUrl, {
-        sheetId: newSheetId,
-        sheetName: NEW_SHEET_NAME,
-        spreadsheetId: SPREADSHEET_ID,
-      });
-
-      // Xóa file JSON tạm
-      try {
-        fs.unlinkSync(reviewsPath);
-        fs.unlinkSync(XLSX_FILE_PATH);
-        console.log(`🗑️ Đã xóa file tạm`);
-      } catch (err) {
-        console.warn(`❌ Không thể xóa file`, err);
-      }
-
       console.log(`✅ Đã lưu ${productReviews.length} review cho sản phẩm.`);
     } catch (err) {
       console.warn(`❌ Lỗi khi crawl ${url}: ${err.message}`);
@@ -323,5 +281,49 @@ async function uploadXlsxToSheet(filePath, sheetName) {
     }
 
     await delay(1000);
+  }
+
+  console.log(
+    `🎉 HOÀN TẤT: Đã crawl ${allReviews.length} sản phẩm và lưu vào reviews.json`
+  );
+
+  // Chuyển đổi JSON thành XLSX
+  const workbook = xlsx.utils.book_new();
+  const sheetData = allReviews.flatMap((product) =>
+    product.reviews.map((review) => ({
+      productLink: product.link,
+      productName: extractProductNameFromUrl(product.link),
+      user: review.user,
+      rating: review.rating,
+      time: convertFields(review.time).time,
+      type: convertFields(review.time).type,
+    }))
+  );
+
+  const worksheet = xlsx.utils.json_to_sheet(sheetData);
+  xlsx.utils.book_append_sheet(workbook, worksheet, "Reviews");
+
+  // Lưu file XLSX
+  const xlsxPath = `${shopName}-reviews.xlsx`;
+  xlsx.writeFile(workbook, xlsxPath);
+
+  console.log(`🎉 Đã xuất dữ liệu thành công vào file: ${xlsxPath}`);
+
+  // Upload file XLSX lên Google Sheets
+  const newSheetId = await uploadXlsxToSheet();
+  // Gửi sheetId sau khi tạo thành công
+  await axios.post(webhookUrl, {
+    sheetId: newSheetId,
+    sheetName: NEW_SHEET_NAME,
+    spreadsheetId: SPREADSHEET_ID,
+  });
+
+  // Xóa file JSON tạm
+  try {
+    fs.unlinkSync(reviewsPath);
+    fs.unlinkSync(XLSX_FILE_PATH);
+    console.log(`🗑️ Đã xóa file tạm`);
+  } catch (err) {
+    console.warn(`❌ Không thể xóa file`, err);
   }
 })();
