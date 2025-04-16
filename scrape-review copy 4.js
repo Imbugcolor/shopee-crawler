@@ -1,7 +1,12 @@
 const puppeteer = require("puppeteer-core");
 const fs = require("fs");
 const path = require("path");
+const xlsx = require("xlsx"); // Import thư viện xlsx
+const { google } = require("googleapis");
 const axios = require("axios");
+
+const CREDENTIALS_PATH = "./secret/credentials.json";
+const SPREADSHEET_ID = "1TId4ofTyab13rj3cP0AwLbUk4MnI3-FwOvK0HMfYlTU";
 
 const productList = JSON.parse(fs.readFileSync(`products.json`, "utf-8"));
 const completedPath = path.resolve(`products-completed.json`);
@@ -54,15 +59,75 @@ const randomDelay = (min, max) => delay(Math.random() * (max - min) + min);
 const webhookUrl =
   "https://open-sg.larksuite.com/anycross/trigger/callback/MGY0OWZmMjMzZmQ0ZWI0NjgzMTkyZWYxODMyMzA4OWFi"; // Thay bằng webhook thật
 
-function chunkArray(array, chunkSize) {
-    const chunks = [];
-    for (let i = 0; i < array.length; i += chunkSize) {
-      chunks.push(array.slice(i, i + chunkSize));
-    }
-    return chunks;
-}
+async function uploadXlsxToSheet(filePath, sheetName) {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: CREDENTIALS_PATH,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
 
-const chunkSize = 500;
+  const client = await auth.getClient();
+  const sheets = google.sheets({ version: "v4", auth: client });
+
+  // Read xlsx
+  const workbook = xlsx.readFile(filePath);
+  const sheetNames = workbook.SheetNames;
+  const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetNames[0]], {
+    header: 1,
+  });
+
+  // Get all sheets
+  const sheetMeta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+  });
+  const existingSheet = sheetMeta.data.sheets.find(
+    (s) => s.properties.title === sheetName
+  );
+
+  // Delete sheet if exists
+  if (existingSheet) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [
+          {
+            deleteSheet: {
+              sheetId: existingSheet.properties.sheetId,
+            },
+          },
+        ],
+      },
+    });
+    console.log(`🗑️ Đã xóa sheet cũ: ${sheetName}`);
+  }
+
+  // Add new sheet
+  const addSheetRes = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    requestBody: {
+      requests: [
+        {
+          addSheet: {
+            properties: {
+              title: sheetName,
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  // Ghi dữ liệu vào sheet mới
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${sheetName}!A1`,
+    valueInputOption: "RAW",
+    requestBody: {
+      values: jsonData,
+    },
+  });
+
+  return addSheetRes.data.replies[0].addSheet.properties.sheetId;
+}
 
 (async () => {
   const browser = await puppeteer.connect({
@@ -75,8 +140,13 @@ const chunkSize = 500;
   for (const [index, product] of productList.entries()) {
     const url = product.link;
     const code = product.code;
+    const XLSX_FILE_PATH = path.resolve(`${code}.xlsx`);
+    const NEW_SHEET_NAME = code;
+    const reviewsPath = path.resolve(`${code}.json`);
 
-    const allReviews = [];
+    const allReviews = fs.existsSync(reviewsPath)
+    ? JSON.parse(fs.readFileSync(reviewsPath, "utf-8"))
+    : [];
 
     if (completedUrls.has(url)) {
       console.log(
@@ -198,6 +268,8 @@ const chunkSize = 500;
         "utf-8"
       );
 
+      // Chuyển đổi JSON thành XLSX
+      const workbook = xlsx.utils.book_new();
       const sheetData = allReviews.flatMap((product) =>
         product.reviews.map((review) => ({
           productLink: product.link,
@@ -209,15 +281,32 @@ const chunkSize = 500;
         }))
       );
 
-      const chunks = chunkArray(sheetData, chunkSize);
+      const worksheet = xlsx.utils.json_to_sheet(sheetData);
+      xlsx.utils.book_append_sheet(workbook, worksheet, "Reviews");
 
-      await Promise.all(chunks.forEach(async (chunk) => {
-       // Gửi sheetId sau khi tạo thành công
-        await axios.post(webhookUrl, {
-          data: chunk,
-          code: code,
-        });
-      }))
+      // Lưu file XLSX
+      const xlsxPath = `${code}.xlsx`;
+      xlsx.writeFile(workbook, xlsxPath);
+
+      console.log(`🎉 Đã xuất dữ liệu thành công vào file: ${xlsxPath}`);
+
+      // Upload file XLSX lên Google Sheets
+      const newSheetId = await uploadXlsxToSheet(XLSX_FILE_PATH, NEW_SHEET_NAME);
+      // Gửi sheetId sau khi tạo thành công
+      await axios.post(webhookUrl, {
+        sheetId: newSheetId,
+        sheetName: NEW_SHEET_NAME,
+        spreadsheetId: SPREADSHEET_ID,
+      });
+
+      // Xóa file JSON tạm
+      try {
+        fs.unlinkSync(reviewsPath);
+        fs.unlinkSync(XLSX_FILE_PATH);
+        console.log(`🗑️ Đã xóa file tạm`);
+      } catch (err) {
+        console.warn(`❌ Không thể xóa file`, err);
+      }
 
       console.log(`✅ Đã lưu ${productReviews.length} review cho sản phẩm.`);
     } catch (err) {
