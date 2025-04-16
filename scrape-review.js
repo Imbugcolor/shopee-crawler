@@ -185,11 +185,6 @@ const chunkSize = 500;
       }
 
       allReviews.push({ ...product, reviews: productReviews });
-      fs.writeFileSync(
-        reviewsPath,
-        JSON.stringify(allReviews, null, 2),
-        "utf-8"
-      );
 
       completedUrls.add(url);
       fs.writeFileSync(
