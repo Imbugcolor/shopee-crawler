@@ -55,11 +55,11 @@ const webhookUrl =
   "https://open-sg.larksuite.com/anycross/trigger/callback/MGY0OWZmMjMzZmQ0ZWI0NjgzMTkyZWYxODMyMzA4OWFi"; // Thay bằng webhook thật
 
 function chunkArray(array, chunkSize) {
-    const chunks = [];
-    for (let i = 0; i < array.length; i += chunkSize) {
-      chunks.push(array.slice(i, i + chunkSize));
-    }
-    return chunks;
+  const chunks = [];
+  for (let i = 0; i < array.length; i += chunkSize) {
+    chunks.push(array.slice(i, i + chunkSize));
+  }
+  return chunks;
 }
 
 const chunkSize = 500;
@@ -206,13 +206,14 @@ const chunkSize = 500;
 
       const chunks = chunkArray(sheetData, chunkSize);
 
-      await Promise.all(chunks.forEach(async (chunk) => {
-       // Gửi sheetId sau khi tạo thành công
-        await axios.post(webhookUrl, {
-          data: chunk,
-          code: code,
-        });
-      }))
+      await Promise.all(
+        chunks.map((chunk) =>
+          axios.post(webhookUrl, {
+            data: chunk,
+            code: code,
+          })
+        )
+      );
 
       console.log(`✅ Đã lưu ${productReviews.length} review cho sản phẩm.`);
     } catch (err) {
